@@ -8,40 +8,178 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v9.1.0/ol.css" />
     <!-- 引入 OpenLayers 的 JS -->
     <script src="https://cdn.jsdelivr.net/npm/ol@v9.1.0/dist/ol.js"></script>
+
+    <!-- wxsdk -->
+    <script type="text/javascript" src="https://res.wx.qq.com/open/js/jweixin-1.3.2.js"></script>
     <style>
       #map {
         width: 100%;
         height: 100vh;
+        .btn {
+          position: fixed;
+          z-index: 999;
+          right: 0;
+        }
+        .right10 {
+          right: 100px;
+        }
+        .right20 {
+          right: 200px;
+        }
+        .right30 {
+          right: 300px;
+        }
       }
     </style>
   </head>
   <body>
     <!-- 地图容器 -->
-    <div id="map"></div>
+    <div id="map">
+      <button onclick="postMess()" class="btn">click</button>
+      <button onclick="returnPage()" class="btn right10">return</button>
+      <button onclick="startDraw(3000)" class="btn right20">开始</button>
+      <button onclick="endDraw()" class="btn right30">结束</button>
+    </div>
 
     <script>
       // 天地图密钥（请替换为你的 tk）
       const tk = 'f285b8c64f1c7c45d09b92ee8976cd45';
 
       // 天地图 WMTS 服务 URL 模板
-      const tileUrl = `http://t{0-7}.tianditu.gov.cn/vec_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tk}`;
+      const tileUrl = `http://t{0-7}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tk}`;
 
-      // 创建天地图瓦片图层
+      // 创建天地图影像底图图层
       const tiandituLayer = new ol.layer.Tile({
         source: new ol.source.XYZ({
           url: tileUrl,
+        }),
+      });
+      // 地名标记图层
+      const nameUrl = `http://t{0-7}.tianditu.gov.cn/cia_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tk}`;
+      const tiandituNameLayer = new ol.layer.Tile({
+        source: new ol.source.XYZ({
+          url: nameUrl,
+        }),
+      });
+
+      // 矢量打点图层
+      const vectorSource = new ol.source.Vector();
+      const vectorLayer = new ol.layer.Vector({
+        source: vectorSource,
+        style: new ol.style.Style({
+          fill: new ol.style.Fill({
+            color: 'rgba(255,0,0,0.2)',
+          }),
+          stroke: new ol.style.Stroke({
+            color: '#ff0000',
+            width: 2,
+          }),
+          image: new ol.style.Circle({
+            radius: 3,
+            fill: new ol.style.Fill({
+              color: '#ff0000',
+            }),
+          }),
         }),
       });
 
       // 初始化地图
       const map = new ol.Map({
         target: 'map', // 绑定到 div#map
-        layers: [tiandituLayer], // 添加天地图图层
+        layers: [tiandituLayer, tiandituNameLayer, vectorLayer], // 添加天地图图层
         view: new ol.View({
-          center: ol.proj.fromLonLat([113.32452, 23.099994]), // 初始中心点（经纬度转投影坐标）
+          projection: 'EPSG:4326',
+          center: [113.32452, 23.099994],
           zoom: 14, // 初始缩放级别
+          maxZoom: 18,
         }),
       });
+
+      // 初始化 Geolocation
+      const geolocation = new ol.Geolocation({
+        trackingOptions: {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 10000,
+        },
+        projection: map.getView().getProjection(),
+      });
+
+      // if (navigator.geolocation) {
+      //   // 支持 Geolocation API
+      //   navigator.geolocation.getCurrentPosition(
+      //     function (position) {
+      //       console.log('纬度：' + position.coords.latitude);
+      //       console.log('经度：' + position.coords.longitude);
+      //     },
+      //     function (error) {
+      //       console.error('获取位置失败：' + error.message);
+      //     }
+      //   );
+      // } else {
+      //   alert('您的浏览器不支持地理位置功能');
+      // }
+
+      // 定位错误处理
+      geolocation.on('error', function (error) {
+        console.log('定位失败:', error.message);
+        alert('定位失败: ' + error.message);
+      });
+
+      let timer = null;
+      let points = [];
+      const startDraw = delay => {
+        if (timer) return;
+        points = [];
+        vectorSource.clear();
+        geolocation.setTracking(true); // 启用定位
+
+        timer = setInterval(() => {
+          const coordinates = geolocation.getPosition();
+          if (coordinates) {
+            points.push(coordinates);
+            const pointFeature = new ol.Feature({
+              geometry: new ol.geom.Point(coordinates),
+            });
+            vectorSource.addFeature(pointFeature);
+            map.getView().setCenter(coordinates); // 地图跟随定位
+            console.log('添加点:', coordinates);
+          } else {
+            console.log('等待定位...');
+          }
+        }, delay);
+      };
+
+      const endDraw = () => {
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+          geolocation.setTracking(false); // 停止定位
+
+          if (points.length > 2) {
+            points.push(points[0]);
+            const polygonFeature = new ol.Feature({
+              geometry: new ol.geom.Polygon([points]),
+            });
+            vectorSource.addFeature(polygonFeature);
+            console.log('绘制polygon');
+          }
+        }
+      };
+
+      const postMess = () => {
+        console.log('发送消息给miniprogram');
+        wx.miniProgram.postMessage({ data: 'foo' });
+        wx.miniProgram.postMessage({ data: { foo: 'bar' } });
+        wx.miniProgram.getEnv(function (res) {
+          console.log(res.miniprogram, 'hhhhh');
+        });
+      };
+      const returnPage = () => {
+        const name = 'lpc1';
+        wx.miniProgram.navigateTo({ url: '/pages/index/index?name=' + name });
+        // wx.miniProgram.navigateBack();
+      };
     </script>
   </body>
 </html>
