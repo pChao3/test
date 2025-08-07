@@ -2,170 +2,281 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>使用 OpenLayers 加载天地图瓦片</title>
-    <!-- 引入 OpenLayers 的 CSS -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>农户确认地块</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v9.1.0/ol.css" />
-    <!-- 引入 OpenLayers 的 JS -->
     <script src="https://cdn.jsdelivr.net/npm/ol@v9.1.0/dist/ol.js"></script>
-
-    <!-- wxsdk -->
     <script type="text/javascript" src="https://res.wx.qq.com/open/js/jweixin-1.3.2.js"></script>
     <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+      }
       #map {
         width: 100%;
         height: 100vh;
-        .btn {
-          position: fixed;
-          z-index: 999;
-          right: 0;
-        }
-        .right10 {
-          right: 100px;
-        }
-        .right20 {
-          right: 200px;
-        }
-        .right30 {
-          right: 300px;
-        }
+      }
+      .top-container {
+        position: fixed;
+        white-space: nowrap;
+        z-index: 999;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      }
+      .submit-container {
+        position: fixed;
+        z-index: 999;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80%;
+      }
+      .btn {
+        padding: 8px 16px;
+        font-size: 14px;
+        color: #fff;
+        background-color: #1890ff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+      }
+      .select-mode {
+        padding: 8px;
+        font-size: 14px;
+        border-radius: 4px;
+        border: 1px solid #d9d9d9;
+        background: #fff;
+        cursor: pointer;
+      }
+      .submit-btn {
+        width: 100%;
+        padding: 12px;
+        font-size: 16px;
+        color: #fff;
+        background-color: rgba(30, 144, 255);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background-color 0.3s;
+      }
+      .hidden {
+        display: none;
+      }
+      .label {
+        font-size: 14px;
+        color: #333;
       }
     </style>
   </head>
   <body>
-    <!-- 地图容器 -->
     <div id="map">
-      <button onclick="postMess()" class="btn">click</button>
-      <button onclick="returnPage()" class="btn right10">return</button>
-      <button onclick="startDraw(3000)" class="btn right20">开始</button>
-      <button onclick="endDraw()" class="btn right30">结束</button>
+      <div class="top-container">
+        <span class="label">选择模式：</span>
+        <select id="drawMode" class="select-mode" onchange="changeDrawMode()">
+          <option value="">无</option>
+          <option value="point">绘制点</option>
+          <option value="polygon">绘制多边形</option>
+        </select>
+        <button onclick="reDraw()" class="btn hidden" id="reDrawBtn">清空</button>
+        <button onclick="finishPointDraw()" class="btn hidden" id="finishPointBtn">完成</button>
+        <button onclick="finishPolygon()" class="btn hidden" id="finishBtn">完成</button>
+      </div>
+      <div class="submit-container">
+        <button onclick="submitFeatures()" class="submit-btn hidden" id="submitBtn">提交</button>
+      </div>
     </div>
 
     <script>
-      // 天地图密钥（请替换为你的 tk）
       const tk = 'f285b8c64f1c7c45d09b92ee8976cd45';
-
-      // 天地图 WMTS 服务 URL 模板
       const tileUrl = `http://t{0-7}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tk}`;
-
-      // 创建天地图影像底图图层
-      const tiandituLayer = new ol.layer.Tile({
-        source: new ol.source.XYZ({
-          url: tileUrl,
-        }),
-      });
-      // 地名标记图层
       const nameUrl = `http://t{0-7}.tianditu.gov.cn/cia_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${tk}`;
-      const tiandituNameLayer = new ol.layer.Tile({
-        source: new ol.source.XYZ({
-          url: nameUrl,
-        }),
+
+      const tiandituLayer = new ol.layer.Tile({
+        source: new ol.source.XYZ({ url: tileUrl }),
       });
 
-      // 矢量打点图层
+      const tiandituNameLayer = new ol.layer.Tile({
+        source: new ol.source.XYZ({ url: nameUrl }),
+      });
+
+      // 绘制图层
       const vectorSource = new ol.source.Vector();
       const vectorLayer = new ol.layer.Vector({
         source: vectorSource,
-        style: new ol.style.Style({
-          fill: new ol.style.Fill({
-            color: 'rgba(255,0,0,0.2)',
-          }),
-          stroke: new ol.style.Stroke({
-            color: '#ff0000',
-            width: 2,
-          }),
-          image: new ol.style.Circle({
-            radius: 3,
+        style: function (feature) {
+          const isHighlighted = feature.get('highlighted');
+          return new ol.style.Style({
             fill: new ol.style.Fill({
-              color: '#ff0000',
+              color: isHighlighted ? 'rgba(0, 255, 0, 0.4)' : 'rgba(255, 0, 0, 0.2)',
             }),
-          }),
-        }),
+            stroke: new ol.style.Stroke({
+              color: isHighlighted ? '#00ff00' : '#ff0000',
+              width: 2,
+            }),
+            image: new ol.style.Circle({
+              radius: 5,
+              fill: new ol.style.Fill({
+                color: isHighlighted ? '#00ff00' : '#ff0000',
+              }),
+            }),
+          });
+        },
       });
 
-      // 初始化地图
+      // 提交图层
+      const finishedSource = new ol.source.Vector();
+      const finishedLayer = new ol.layer.Vector({
+        source: finishedSource,
+        style: function (feature) {
+          return new ol.style.Style({
+            fill: new ol.style.Fill({
+              color: 'rgba(30, 144, 255, 0.5)',
+            }),
+            stroke: new ol.style.Stroke({
+              color: 'rgba(30, 144, 255)',
+              width: 2,
+            }),
+            image: new ol.style.Circle({
+              radius: 5,
+              fill: new ol.style.Fill({
+                color: 'rgba(30, 144, 255)',
+              }),
+            }),
+          });
+        },
+      });
+
       const map = new ol.Map({
-        target: 'map', // 绑定到 div#map
-        layers: [tiandituLayer, tiandituNameLayer, vectorLayer], // 添加天地图图层
+        target: 'map',
+        layers: [tiandituLayer, tiandituNameLayer, vectorLayer, finishedLayer],
+        controls: [], // 移除所有默认控件，包括缩放按钮
         view: new ol.View({
           projection: 'EPSG:4326',
           center: [113.32452, 23.099994],
-          zoom: 14, // 初始缩放级别
+          zoom: 14,
           maxZoom: 18,
         }),
       });
 
-      // 初始化 Geolocation
-      const geolocation = new ol.Geolocation({
-        trackingOptions: {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: 10000,
-        },
-        projection: map.getView().getProjection(),
-      });
-
-      // if (navigator.geolocation) {
-      //   // 支持 Geolocation API
-      //   navigator.geolocation.getCurrentPosition(
-      //     function (position) {
-      //       console.log('纬度：' + position.coords.latitude);
-      //       console.log('经度：' + position.coords.longitude);
-      //     },
-      //     function (error) {
-      //       console.error('获取位置失败：' + error.message);
-      //     }
-      //   );
-      // } else {
-      //   alert('您的浏览器不支持地理位置功能');
-      // }
-
-      // 定位错误处理
-      geolocation.on('error', function (error) {
-        console.log('定位失败:', error.message);
-        alert('定位失败: ' + error.message);
-      });
-
-      let timer = null;
+      let drawMode = null;
       let points = [];
-      const startDraw = delay => {
-        if (timer) return;
+      let polygons = [];
+
+      function updateSubmitButton() {
+        const submitBtn = document.getElementById('submitBtn');
+        const reDrawBtn = document.getElementById('reDrawBtn');
+        const hasFinishedFeatures = finishedSource.getFeatures().length > 0;
+        submitBtn.classList.toggle('hidden', !hasFinishedFeatures);
+        reDrawBtn.classList.toggle('hidden', !hasFinishedFeatures);
+      }
+
+      function updateFinishPointButton() {
+        const finishPointBtn = document.getElementById('finishPointBtn');
+        const showFinishPoint = drawMode === 'point' && vectorSource.getFeatures().length > 0;
+        finishPointBtn.classList.toggle('hidden', !showFinishPoint);
+      }
+
+      function updateFinishPolygonButton() {
+        const finishBtn = document.getElementById('finishBtn');
+        const showFinish = drawMode === 'polygon' && points.length >= 3;
+        finishBtn.classList.toggle('hidden', !showFinish);
+      }
+
+      function changeDrawMode() {
+        const select = document.getElementById('drawMode');
+        drawMode = select.value;
         points = [];
         vectorSource.clear();
-        geolocation.setTracking(true); // 启用定位
+        updateFinishPointButton();
+        updateFinishPolygonButton();
+        updateSubmitButton();
+        console.log(
+          drawMode ? `${drawMode === 'point' ? '点' : '多边形'}绘制已启用` : '绘制已禁用'
+        );
+      }
 
-        timer = setInterval(() => {
-          const coordinates = geolocation.getPosition();
-          if (coordinates) {
-            points.push(coordinates);
-            const pointFeature = new ol.Feature({
-              geometry: new ol.geom.Point(coordinates),
-            });
-            vectorSource.addFeature(pointFeature);
-            map.getView().setCenter(coordinates); // 地图跟随定位
-            console.log('添加点:', coordinates);
-          } else {
-            console.log('等待定位...');
-          }
-        }, delay);
-      };
-
-      const endDraw = () => {
-        if (timer) {
-          clearInterval(timer);
-          timer = null;
-          geolocation.setTracking(false); // 停止定位
-
-          if (points.length > 2) {
-            points.push(points[0]);
-            const polygonFeature = new ol.Feature({
-              geometry: new ol.geom.Polygon([points]),
-            });
-            vectorSource.addFeature(polygonFeature);
-            console.log('绘制polygon');
-          }
+      function finishPointDraw() {
+        if (drawMode === 'point' && vectorSource.getFeatures().length > 0) {
+          const features = vectorSource.getFeatures().slice();
+          finishedSource.addFeatures(features);
+          vectorSource.clear();
+          console.log('点绘制完成');
+          updateFinishPointButton();
+          updateSubmitButton();
         }
-      };
+      }
+
+      function finishPolygon() {
+        if (drawMode === 'polygon' && points.length >= 3) {
+          const polygonPoints = [...points, points[0]];
+          const polygon = new ol.Feature({
+            geometry: new ol.geom.Polygon([polygonPoints]),
+          });
+          finishedSource.addFeature(polygon);
+          vectorSource.clear();
+          points = [];
+          console.log('多边形已绘制');
+          updateFinishPolygonButton();
+          updateSubmitButton();
+        }
+      }
+
+      function reDraw() {
+        finishedSource.clear();
+        vectorSource.clear();
+        points = [];
+        updateFinishPointButton();
+        updateFinishPolygonButton();
+        updateSubmitButton();
+        console.log('已清除所有绘制');
+      }
+
+      function submitFeatures() {
+        const features = finishedSource.getFeatures();
+        const geojson = new ol.format.GeoJSON().writeFeatures(features, {
+          featureProjection: 'EPSG:4326',
+        });
+        console.log('提交的GeoJSON:', geojson);
+        wx.miniProgram.postMessage({ data: { geojson: geojson } });
+      }
+
+      map.on('click', function (event) {
+        const coordinate = event.coordinate;
+
+        if (drawMode === 'point') {
+          const pointFeature = new ol.Feature({
+            geometry: new ol.geom.Point(coordinate),
+          });
+          vectorSource.addFeature(pointFeature);
+          console.log('点击添加点:', coordinate);
+          updateFinishPointButton();
+          updateSubmitButton();
+        } else if (drawMode === 'polygon') {
+          points.push(coordinate);
+          const pointFeature = new ol.Feature({
+            geometry: new ol.geom.Point(coordinate),
+          });
+          vectorSource.addFeature(pointFeature);
+          console.log('点击添加多边形点:', coordinate);
+          updateFinishPolygonButton();
+          updateSubmitButton();
+        }
+      });
 
       const postMess = () => {
         console.log('发送消息给miniprogram');
@@ -175,10 +286,10 @@
           console.log(res.miniprogram, 'hhhhh');
         });
       };
+
       const returnPage = () => {
         const name = 'lpc1';
         wx.miniProgram.navigateTo({ url: '/pages/index/index?name=' + name });
-        // wx.miniProgram.navigateBack();
       };
     </script>
   </body>
